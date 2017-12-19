@@ -19,3 +19,7 @@ val extractName: Parser[Name] = for {
 
 println(extractName.parse(hello("Romain")).right.get)
 ```
+
+## Usage
+
+For real world usage you can use [atto](https://github.com/tpolecat/atto)
