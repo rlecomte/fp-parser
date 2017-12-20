@@ -1,0 +1,297 @@
+| \g un parseur textuel avec des vrais morceaux de monade dedans
+
+---
+
+| \g Regex mail
+
+| \r ^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$
+
+\g Parser des chaînes de caractères ?
+<    - regex
+<    - fastidieux
+<    - difficile à maintenir
+<    - difficile de composer des parseurs
+
+---
+
+\g Défit du jour construire un parseur :
+<    - lisible et maintenable
+<    - compose
+<    - sans regex!
+
+---
+\g Pour cela on va utiliser :
+<    - le langage Scala
+<    - Un style fonctionnel
+<    - ...avec l'aide de la librairie cats
+
+---
+
+\g Un parseur est une fonction : \y String => String
+
+
+```
+val word: String => String = str => {
+    str.dropWhile(_.isWhitespace).takeWhile(_.isLetter)
+}
+
+word("Hello world!")
+```
+---
+
+\gSi on veut prendre les deux premiers mots?
+
+\y:( ça ne fonctionne pas car on ne garde pas l'état de la chaîne de caractères.
+
+Il faut garder l'état après parsing : \yString => (String, String)
+
+```
+val word: String => (String, String) = {
+    str => str.span(_.isLetter)
+}
+
+word("Hello world!")
+```
+
+---
+\get si on veut extraite les deux premiers mots :
+
+
+```
+val first: (String, String) = word("Hello world!")
+
+val second: (String, String) = word(first._2.trim)
+```
+---
+\gC'est mieux mais ça reste pénible à manipuler.
+
+En fait nous venons d'implémenter les bases d'une
+structure fonctionelle : la monade state.
+
+Pas de panique! Nous allons détailler son fonctionnement.
+
+---
+La monade state a deux paramètres génériques : \gState[S, A]
+
+    \y* Le type S représente l'état qu'on va manipuler
+
+      Dans notre cas l'état sera de type String.
+      Il représentera la chaîne de caractère que nous voulons parser.
+
+    \y* Le type A représente le type de retour de la monade
+
+      Dans le cas où nous allons parser un mot, le type A sera String.
+      Si on veut parser un chiffre, il sera de type Int.
+
+---
+\gLa structure State[S, A] est une monade.
+
+Elle posséde les méthodes avec la signature suivante :
+
+```
+trait State[S, A] {
+  def map[B](f: A => B): State[S, B] = ...
+
+  def flatMap[B](f: A => State[S, B]): State[S, B] = ...
+}
+
+def pure[S, A](value: A): State[S, A] = ???
+```
+---
+\gune monade représente une "chaine" de traitement.
+
+Chaque instructions dépendant du résultat de la précédente.
+
+permet de composer chaque "bout" de notre programme.
+
+---
+
+```
+    val state: State[String, Int] = \ypure[String, Int](1)\w.map(one => one + 2)
+
+    state.run("useless")
+    // result: (String, Int) = ("useless", 3)
+
+```
+
+---
+
+```
+
+    val state: State[String, Int] = {
+        pure[String, Int](1)
+        .flatMap { one =>
+            pure(2).map(two => two + one)
+        }
+    }
+
+    state.run("useless")
+    // result: (String, Int) = ("useless", 3)
+
+```
+---
+
+```
+    val state: State[String, Int] = for {
+        one <- pure[String, Int](1) //flatMap
+        two <- pure[String, Int](2) //map
+    } yield one + two
+
+    state.run("useless")
+    // result: (String, Int) = ("useless", 3)
+```
+
+---
+\gBonus! Si je veux garder uniquement un des deux résultats ?
+
+```
+    def *>[S, A, B](s1: State[S, A], s2: State[S, B]): State[S, B] = {
+        s1.flatMap(_ => s2)
+    }
+
+    def <*[S, A, B](s1: State[S, A], s2: State[S, B]): State[S, A] = {
+        s1.flatMap(r => s2.map(_ => r))
+    }
+```
+
+---
+
+```
+    val takeRight: State[String, Int] = pure(1) *> pure(2)
+    takeRight.run("useless")
+    // result: (String, Int) = ("useless", 2)
+
+
+    val takeLeft: State[String, Int] = pure(1) <* pure(2)
+    takeLeft.run("useless")
+    // result: (String, Int) = ("useless", 1)
+```
+---
+\gNous allons utiliser une monade state pour implémenter notre parseur.
+
+
+```
+//On peut définir en Scala des types "alias"
+type Parser[A] = State[String, A]
+--
+
+// State posséde un constructeur "apply"
+def apply[S, A](f: \yS => (S, A)\w): State[S, A] = ???
+--
+
+//méthode utilitaire pour faciliter l'instanciation de nos parseurs
+def parser[A](f: String => (String, A)): Parser[A] = State[String, A](f)
+```
+---
+\gNotre parseur
+```
+val word: Parser[String] = parser { value =>
+    val wordAndState: (String, String) = {
+        str.dropWhile(_.isWhitespace).span(_.isLetter)
+    }
+    wordAndState.swap
+}
+--
+
+twoWord.run("Hello World!")
+//rest34: (String, (String, String)) = ("!", ("Hello", "World"))
+```
+---
+\gon peut créer d'autre parseurs:
+
+```
+val digit: Parser[Int] = parser { value =>
+    if (value.nonEmpty && value.head.isDigit) {
+        (value.tail, value.head.asDigit)
+    } else {
+        throw new RuntimeException("Not a digit!")
+    }
+}
+
+```
+
+---
+
+```
+def skip(n: Int): Parser[Unit] = parser { value =>
+    (value.drop(n), ())
+}
+
+def char(c: Char): Parser[Unit] = parser { value =>
+    if (value.nonEmpty && value.head == c) {
+        (value.tail, ())
+    } else {
+        throw new RuntimeException(s"Not char $c")
+    }
+}
+```
+
+---
+
+```
+def repeat[A](p: Parser[A])(n: Int): Parser[List[A]] = {
+    if (n == 0) pure[List[A]](Nil)
+    else {
+        p.flatMap { r =>
+            repeat(p)(n - 1).map(list => r :: list)
+        }
+    }
+}
+```
+
+---
+
+\gParser un numéro de téléphone :
+
+--
+06.12.34.56.72
+--
+\r06\w.12.34.56.72
+--
+\r06\y.12\w.34.56.72
+--
+\r06\y.12.34\w.56.72
+--
+\r06\y.12.34.56\w.72
+--
+\r06\y.12.34.56.72
+---
+
+```
+//extrait les deux premiers digits
+val extractFirstDigits: State[String, List[Int]] = {
+    repeat(digit)(2)
+}
+--
+
+//extrait les deux digits du pattern \y.XX
+val extractNextDigits: State[String, List[Int]] = {
+    char('.') *> extractDigits
+}
+```
+
+---
+
+\gon assemble nos pièces...
+```
+val phoneNumberParser = for {
+    firstDigits <- extractFirstDigits
+    nextDigits <- repeat(extractNextDigits)(4).map(_.flatten)
+} yield firstDigits ++ nextDigits
+
+--
+
+phoneNumberParser.parse("06.12.34.56.72")
+//List(0, 6, 1, 2, 3, 4, 5, 5, 7, 2)
+```
+
+---
+\gMerci!
+
+\y https://github.com/rlecomte/fp-parser
+
+\y https://github.com/tpolecat/atto
+
+--
+\gDes questions ?
+---
